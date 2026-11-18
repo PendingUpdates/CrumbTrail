@@ -2,11 +2,11 @@
 
 ![CrumbTrail endpoint investigation banner](assets/CrumbTrail-Banner.gif)
 
-Independent Windows event triage with original-byte preservation, a UTC timeline, logon-session views, and an offline report. CrumbTrail 0.3.0 reads native Velociraptor event exports or parses an explicitly supplied EVTX directory with exact source timestamps. It needs no email account, cloud connector, sibling repository, or shared evidence engine.
+Independent Windows event triage with original-byte preservation, a UTC timeline, logon-session views, and an offline report. CrumbTrail 0.3.0 reads supplied native Velociraptor JSON/JSONL event exports or parses an explicitly supplied directory of exported EVTX files with exact source timestamps. Use `import` and `local` for supplied real evidence, and `demo` and `lab` for synthetic fixtures. It needs no email account, cloud connector, sibling repository, or shared evidence engine.
 
 The Python package is `crumbtrail`, the distribution is `crumbtrail-ir`, and the CLI is `crumbtrail`. Python 3.11 or newer is required. The base offline workflow uses only the standard library. `local` additionally requires the optional `evtx` extra, pinned to `python-evtx==0.8.1`; no parser dependency is required to verify or analyze a completed case. Velociraptor is required for `lab` and `local`.
 
-This unreleased offline provider-policy candidate interprets only supported combinations of channel, explicit provider name and event ID. Provider names are matched case-insensitively while their supplied text remains preserved. Missing, unknown or unsupported combinations remain visible as **unclassified** events with a reason; they do not establish sessions, boundaries or findings. A recognized provider name selects a supported schema, not an authenticated publisher. Rebuilding an older providerless case can therefore remove previous derived associations without changing its original bytes, event IDs, timestamps or references.
+CrumbTrail interprets only supported combinations of channel, explicit provider name and event ID. Provider names are matched case-insensitively while their supplied text remains preserved. Missing, unknown or unsupported combinations remain visible as **unclassified** events with a reason; they do not establish sessions, boundaries or findings. A recognized provider name selects a supported schema, not an authenticated publisher. Rebuilding an older providerless case can therefore remove previous derived associations without changing its original bytes, event IDs, timestamps or references.
 
 ## Permissions and access
 
@@ -59,7 +59,7 @@ python -m crumbtrail lab --root .\cases\native-lab `
   --velociraptor C:\IRTools\velociraptor.exe
 ```
 
-This executes the real VQL engine against the unchanged providerless JSONL fixture through `Custom.CrumbTrail.LabReplay`, then preserves its original stdout bytes. It does not load a driver, read live RAM/disks, or collect current-host logs. With this candidate's policy, the expected interpretation is 21 unclassified events, zero findings and zero collection-coverage gaps; native replay has not been rerun for this candidate. `collection/run-*/` retains the collector request, stdout, stderr, executable SHA-256, and result. The supplied executable runs with the caller's current token; no automatic elevation is requested.
+This executes the real VQL engine against the unchanged providerless JSONL fixture through `Custom.CrumbTrail.LabReplay`, then preserves its original stdout bytes. It does not load a driver, read live RAM/disks, or collect current-host logs. With the current provider policy, the expected interpretation is 21 unclassified events, zero findings and zero collection-coverage gaps; native replay has not been rerun under this provider policy. `collection/run-*/` retains the collector request, stdout, stderr, executable SHA-256, and result. The supplied executable runs with the caller's current token; no automatic elevation is requested.
 
 ## Bring real event evidence
 
