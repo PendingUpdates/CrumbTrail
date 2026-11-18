@@ -1,6 +1,6 @@
 # CrumbTrail
 
-![CrumbTrail endpoint investigation banner](assets/CrumbTrail-Banner.png)
+![CrumbTrail endpoint investigation banner](assets/CrumbTrail-Banner.gif)
 
 Independent Windows event triage with original-byte preservation, a UTC timeline, logon-session views, and an offline report. CrumbTrail 0.3.0 reads native Velociraptor event exports or parses an explicitly supplied EVTX directory with exact source timestamps. It needs no email account, cloud connector, sibling repository, or shared evidence engine.
 
