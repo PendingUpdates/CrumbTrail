@@ -24,12 +24,14 @@ class CrumbTrailTests(unittest.TestCase):
         self.base = Path(self.temp.name)
         self.case = Case.create(self.base / "case", "2026-10-30T20:00:00Z", "2026-10-30T22:00:00Z", "CT-TEST")
         self.case.bind(LAB_CLIENT, "LAB-WIN01")
-        self.raw = data_path("windows.jsonl").read_bytes()
+        # Explicitly authored synthetic providers keep positive rule coverage.
+        # The untouched providerless demo is covered separately in test_providers.
+        self.raw = data_path("windows-providers.jsonl").read_bytes()
         self.rows = records(self.raw)
 
     def preserve(self, rows=None, client=LAB_CLIENT, simulation=True):
         raw = self.raw if rows is None else b"\n".join(encode(row) for row in rows) + b"\n"
-        return self.case.preserve(raw, client, "test-export", simulation, {"filename": "windows.jsonl"})
+        return self.case.preserve(raw, client, "test-export", simulation, {"filename": "windows-providers.jsonl"})
 
     def test_packaged_artifact_requires_explicit_export_directory(self):
         # Static contract only: a real VQL precondition run is a separate gate.
@@ -79,7 +81,8 @@ class CrumbTrailTests(unittest.TestCase):
         self.preserve()
         result = analyze(self.case)
         self.assertEqual(result["summary"], dict(events=21, findings=4, gaps=0, artifacts=1,
-                         raw_event_rows=22, excluded_outside_window=0, duplicate_rows=1))
+                         raw_event_rows=22, excluded_outside_window=0, duplicate_rows=1,
+                         unclassified_events=0))
         self.assertEqual(sum(len(e["references"]) for e in result["events"]), 22)
         self.assertEqual(len([e for e in result["events"] if len(e["references"]) == 2]), 1)
 
@@ -241,6 +244,14 @@ class CrumbTrailTests(unittest.TestCase):
         first, second = [json.loads((root / "timeline.json").read_text(encoding="utf-8")) for root in roots]
         self.assertEqual(first["events"], second["events"])
         self.assertEqual(first["findings"], second["findings"])
+        for result in (first, second):
+            self.assertEqual(result["summary"]["events"], 21)
+            self.assertEqual(result["summary"]["unclassified_events"], 21)
+            self.assertEqual(result["findings"], [])
+            self.assertEqual(result["session_view"]["summary"]["sessions"], 0)
+            self.assertEqual(result["session_view"]["summary"]["unlinked_events"], 21)
+            self.assertEqual(sum(len(event["references"]) for event in result["events"]), 22)
+            self.assertTrue(all(event["classification"]["status"] == "missing-provider" for event in result["events"]))
 
     def test_native_parser_requires_explicit_log_directory(self):
         executable = self.base / "collector.exe"

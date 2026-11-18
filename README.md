@@ -6,6 +6,8 @@ Independent Windows event triage with original-byte preservation, a UTC timeline
 
 The Python package is `crumbtrail`, the distribution is `crumbtrail-ir`, and the CLI is `crumbtrail`. Python 3.11 or newer is required. The base offline workflow uses only the standard library. `local` additionally requires the optional `evtx` extra, pinned to `python-evtx==0.8.1`; no parser dependency is required to verify or analyze a completed case. Velociraptor is required for `lab` and `local`.
 
+This unreleased offline provider-policy candidate interprets only supported combinations of channel, explicit provider name and event ID. Provider names are matched case-insensitively while their supplied text remains preserved. Missing, unknown or unsupported combinations remain visible as **unclassified** events with a reason; they do not establish sessions, boundaries or findings. A recognized provider name selects a supported schema, not an authenticated publisher. Rebuilding an older providerless case can therefore remove previous derived associations without changing its original bytes, event IDs, timestamps or references.
+
 ## Permissions and access
 
 CrumbTrail does not authenticate to Microsoft Graph, Exchange Online, Google Workspace/GAM or Active Directory. It needs no OAuth scopes, application consent, tenant roles, domain credentials or Domain Admin membership for its implemented workflows. A bound client ID, organization and hostname are provenance labels, not authentication.
@@ -44,9 +46,9 @@ python -m venv .venv
 
 Open `cases/demo/report.html`. The CLI equivalent in an activated environment is `crumbtrail demo --root ./cases/demo`. Use a new directory for every demo/lab run; existing cases are never overwritten.
 
-Expected deterministic fixture result: **21 distinct Windows events, four findings from three rule types, one duplicate row, five covered channels, zero gaps**. The fixture contains 22 event rows and five coverage rows. Findings consist of two logon/process associations, one recovery-suppression observation, and one rapid file-creation/recovery-note association. Benign backup activity does not trigger the file-burst rule. The fixture is telemetry text; no malicious command in it is executed. All its derived events are labeled synthetic.
+The original providerless fixture is unchanged. Its expected result is now **21 retained events, 21 unclassified events, zero findings, one duplicate row and zero collection-coverage gaps**. It contains 22 event rows and five coverage rows. Missing provider information is not a clean-host result. All derived events remain synthetic, and no command text is executed.
 
-The demo's session view has one observed start, three events linked by explicit IDs, 18 unlinked events, and no ambiguous events. A process GUID shared with a linked process does not give a file event a missing logon ID.
+The legacy demo's session view has zero observed starts and 21 unlinked events. The separately authored `data/windows-providers.jsonl` synthetic fixture supplies documented provider names and retains positive regression coverage: 21 events, four findings from three rule types, one start, three linked events and 18 unlinked events. Its bytes and derived IDs differ from the legacy fixture by design; providers are never backfilled into imported evidence. A process GUID does not supply a missing logon ID.
 
 ## Native inert lab
 
@@ -57,7 +59,7 @@ python -m crumbtrail lab --root .\cases\native-lab `
   --velociraptor C:\IRTools\velociraptor.exe
 ```
 
-This executes the real VQL engine against the bundled JSONL fixture through `Custom.CrumbTrail.LabReplay`, then preserves its original stdout bytes. It does not load a driver, read live RAM/disks, or collect current-host logs. The result should match the demo's 21 events/four findings/zero gaps. `collection/run-*/` retains the collector request, stdout, stderr, executable SHA-256, and result. The supplied executable runs with the caller's current token; no automatic elevation is requested.
+This executes the real VQL engine against the unchanged providerless JSONL fixture through `Custom.CrumbTrail.LabReplay`, then preserves its original stdout bytes. It does not load a driver, read live RAM/disks, or collect current-host logs. With this candidate's policy, the expected interpretation is 21 unclassified events, zero findings and zero collection-coverage gaps; native replay has not been rerun for this candidate. `collection/run-*/` retains the collector request, stdout, stderr, executable SHA-256, and result. The supplied executable runs with the caller's current token; no automatic elevation is requested.
 
 ## Bring real event evidence
 
@@ -88,7 +90,9 @@ The [bounded EVTX lab runner](docs/evtx-lab.md) compares this actual native path
 
 Exact local parsing reads the BinXML `Event/System/TimeCreated/@SystemTime` FILETIME substitution and binds its bytes to the source hash, record/field offsets, XML identity and original native result row. It does not substitute record-header time or Windows-oracle results. Ambiguous/missing matches, changed sources, unsupported parser versions and malformed nonzero chunks fail the operation. See [exact-time design and compatibility](docs/exact-time.md).
 
-The WindowsTriage artifact now has an empty `LogDirectory` default and a nonblank-path precondition, including when run directly in Velociraptor. An omitted/blank path does not fall back to current-host logs. Operators must supply an authorized exported-log directory; this guard is not a filesystem sandbox and does not certify the provenance of a supplied directory. The local CLI additionally checks that the supplied directory exists.
+The WindowsTriage artifact now has an empty `LogDirectory` default and a nonblank-path precondition, including when run directly in Velociraptor. An omitted/blank path does not fall back to current-host logs. Operators must supply an authorized exported-log directory; this guard is not a filesystem sandbox and does not certify the provenance of a supplied directory. The local CLI rejects empty or whitespace-only directory text before converting it to a path, and checks that the supplied directory exists. An explicit `.` remains an intentional directory choice; nonblank path text is not stripped.
+
+The Python native wrapper also rejects blank raw directory text. Callers must validate text before constructing a `Path`: Python has already converted `Path("")` into `Path(".")`, so the wrapper cannot recover whether that object originated from empty text.
 
 The two artifact YAML files are packaged under `src/crumbtrail/data`. They may be installed in an existing Velociraptor deployment using its normal artifact management, then the full unnamed source can be exported for `import`. **Version 0.2 has no remote API client, artifact installer, server provisioning, remote scheduling, pagination, or collection resume command.** Do not treat a local lab pass as validation of a server deployment. [Velociraptor server API documentation](https://docs.velociraptor.app/docs/server_automation/server_api/)
 
@@ -99,9 +103,9 @@ crumbtrail sessions --root D:\Cases\example
 crumbtrail sessions --root D:\Cases\example --client-id C.0123456789abcdef
 ```
 
-The command verifies original evidence under the case lock, rebuilds the full report, and prints JSON for all hosts or the requested bound client. Filtering affects printed output only; saved case reports remain complete. `analyze`, `import`, `demo`, and `lab` also build the view automatically. Open **Logon-session views** in `report.html`, inspect `sessions.json`, or read `timeline.json`'s additive `session_view` field. The existing timeline CSV remains unchanged.
+The command verifies original evidence under the case lock, rebuilds the full report, and prints JSON for all hosts or the requested bound client. Filtering affects printed output only; saved case reports remain complete. `analyze`, `import`, `demo`, and `lab` also build the view automatically. Open **Logon-session views** in `report.html`, inspect `sessions.json`, or read `timeline.json`'s additive `session_view` field. The timeline CSV column schema remains unchanged.
 
-Views use valid explicit `LogonId`, `TargetLogonId`, and `SubjectLogonId` fields, scoped by organization, client ID, hostname, and simulation status. The raw field name/value and normalized numeric ID stay visible. A Security 4624 start uses its **TargetLogonId**; its initiating subject ID does not become the new session. Providerless legacy start records remain usable, while an explicitly different provider is rejected as a start. Other events containing distinct usable IDs remain ambiguous; no account, process GUID, process ID, or nearby timestamp supplies a missing ID.
+Views use valid explicit `LogonId`, `TargetLogonId`, and `SubjectLogonId` fields from supported provider/channel/event combinations, scoped by organization, client ID, hostname, and simulation status. The raw field name/value and normalized numeric ID stay visible. A supported Security 4624 start uses its **TargetLogonId**; its initiating subject ID does not become the new session. Providerless and unsupported records remain unclassified and unlinked, with their references retained. Other supported events containing distinct usable IDs remain ambiguous; no account, process GUID, process ID, or nearby timestamp supplies a missing ID.
 
 Repeated starts with the same ID in one boundary context remain separate observed-start views. Their other ID-matching events stay ambiguous; the tool does not choose the closest start. Events preceding the only observed start remain unlinked. An ID without a start forms an explicitly unbounded ID group, which is not asserted to be a single complete session. Every linked, unlinked, and ambiguous event retains its original raw references. Boundary/source limitations do not remove the event from the main timeline.
 
@@ -127,7 +131,11 @@ Each case contains:
 | `report.html` | Self-contained offline report with escaped evidence text and local raw links |
 | `collection/run-*/` | Native execution request/stdout/stderr diagnostics, when applicable |
 
+Report generation checks the four derived-output destinations before writing and accepts only absent paths or ordinary single-link files. Each JSON, CSV and HTML file is written to an exclusive temporary file, flushed, and replaced after that file is complete. A failed write before replacement retains the previous complete file. Replacement is per file, not a transaction across all four reports; after an interrupted regeneration, rerun analysis before handing off the report set.
+
 Every retained raw event reference includes the original artifact hash and its one-based row number in the parsed result sequence. Duplicate events share one timeline event while retaining all references. Event IDs include the case and endpoint identities. Timestamp offsets normalize to UTC; timestamps without a timezone are rejected. Events outside the inclusive case window remain in raw evidence and are counted as excluded from the timeline.
+
+Normalized events include a `classification` status and reason. `summary.unclassified_events` reports interpretation limitations separately from collection-coverage gaps; it does not change the coverage-based CLI exit status. JSON preserves classification details, and HTML/CSV labels identify unclassified observations. Unclassified account, process, command, path and hash convenience fields are deliberately empty; their original values remain in the linked raw evidence. Supplied source logon-ID fields remain visible without establishing membership. Rebuild all derived views together after adopting this policy; existing saved views are not silently migrated.
 
 `System.TimeCreated.SystemTime` takes precedence over formatted top-level `TimeCreated`. The original imported value remains in `timestamp_original`, its field path in `timestamp_source`, and raw JSON bytes remain unchanged. Native exact cases add `timestamp_precision="evtx-systemtime-100ns"` and `references[].exact_time`; `timestamp_utc` is derived from the proven source bytes using integer arithmetic. Case-window selection, timeline ordering, correlations and session boundaries retain seven fractional digits when supplied. This is representation precision, not a guarantee of clock accuracy or causality.
 

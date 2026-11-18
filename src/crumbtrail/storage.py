@@ -121,18 +121,29 @@ def now():
     return iso(datetime.now(timezone.utc))
 
 
-def save(path, value):
+@contextmanager
+def atomic_writer(path, *, encoding=None, newline=None):
+    """Write a sibling temporary file and replace the destination only on success."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
+    created = False
     try:
-        with temporary.open("xb") as stream:
-            stream.write(encode(value) + b"\n")
+        options = {} if encoding is None else dict(encoding=encoding, newline=newline)
+        with temporary.open("xb" if encoding is None else "x", **options) as stream:
+            created = True
+            yield stream
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, path)
     finally:
-        temporary.unlink(missing_ok=True)
+        if created:
+            temporary.unlink(missing_ok=True)
+
+
+def save(path, value):
+    with atomic_writer(path) as stream:
+        stream.write(encode(value) + b"\n")
 
 
 def read(path):

@@ -14,6 +14,12 @@ from .storage import Case, CaseError, MAX_BYTES, case_lock
 LAB_CLIENT = "C.0123456789abcdef"
 
 
+def _log_directory(value):
+    if not value.strip():
+        raise argparse.ArgumentTypeError("Supply a nonblank exported EVTX log directory explicitly.")
+    return Path(value)
+
+
 def parser():
     result = argparse.ArgumentParser(prog="crumbtrail", description="Preserve and triage Windows event evidence offline.")
     result.add_argument("--version", action="version", version="CrumbTrail " + __version__)
@@ -48,7 +54,7 @@ def parser():
         if name in ("local", "lab"):
             command.add_argument("--velociraptor", required=True, type=Path)
         if name == "local":
-            command.add_argument("--log-directory", required=True, type=Path)
+            command.add_argument("--log-directory", required=True, type=_log_directory)
     return result
 
 
