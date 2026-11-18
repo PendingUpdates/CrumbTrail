@@ -99,5 +99,5 @@ h1,h2{color:#163a54}a{color:#075985}table{width:100%;border-collapse:collapse;ba
     page += "<h2>Findings</h2><ul>" + (findings or "<li>No configured rule matched; this is not a clean-host verdict.</li>") + "</ul>"
     page += session_section(result["session_view"])
     page += '<h2>Timeline (UTC)</h2><div class="table"><table><thead><tr><th>UTC</th><th>Endpoint</th><th>Observation</th></tr></thead><tbody>' + "".join(rows) + "</tbody></table></div></body></html>"
-    with atomic_writer(case.root / "report.html", encoding="utf-8") as stream:
+    with atomic_writer(case.root / "report.html", encoding="utf-8", newline="") as stream:
         stream.write(page)

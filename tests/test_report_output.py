@@ -37,10 +37,10 @@ class ReportOutputTests(unittest.TestCase):
         case.preserve(self.raw, CLIENT, "report-fixture", True)
         return case
 
-    def add_formatted_event(self):
+    def add_formatted_event(self, command=FORMATTED_COMMAND):
         row = copy.deepcopy(records(self.raw)[1])
         row["System"]["EventRecordID"] = 987654
-        row["EventData"]["CommandLine"] = FORMATTED_COMMAND
+        row["EventData"]["CommandLine"] = command
         self.case.preserve(encode([row]), CLIENT, "report-format-fixture", True)
         self.result = analyze(self.case)
 
@@ -102,6 +102,26 @@ class ReportOutputTests(unittest.TestCase):
             self.assertIn('id="' + event["event_id"] + '"', html)
             for ref in event["references"]:
                 self.assertIn('href="' + ref["artifact"] + '">raw ' + ref["sha256"][:12] + " row " + str(ref["row"]), html)
+        self.assert_evidence_unchanged(evidence)
+
+    def test_html_preserves_line_breaks_with_windows_text_defaults(self):
+        command = FORMATTED_COMMAND + "\r\nCRLF line\rCR line\nLF line"
+        self.add_formatted_event(command)
+        evidence = self.evidence_bytes()
+        original_open = Path.open
+
+        def windows_text_open(path, mode="r", buffering=-1, encoding=None, errors=None, newline=None):
+            # Exercise Windows write translation on every test platform.
+            if "b" not in mode and any(flag in mode for flag in "wax") and newline is None:
+                newline = "\r\n"
+            return original_open(path, mode, buffering, encoding, errors, newline)
+
+        with patch("pathlib.Path.open", windows_text_open):
+            write_report(self.case, self.result)
+
+        expected = ("<pre>" + escape(command, quote=True) + "</pre>").encode("utf-8")
+        self.assertTrue(expected in (self.case.root / "report.html").read_bytes(),
+                        "HTML changed supplied LF, CRLF or CR line breaks")
         self.assert_evidence_unchanged(evidence)
 
     def test_directory_destination_rejected_before_any_report_changes(self):
