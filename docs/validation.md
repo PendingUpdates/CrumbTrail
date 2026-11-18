@@ -1,5 +1,7 @@
 # Validation and lab acceptance
 
+This unreleased provider-policy candidate changes offline interpretation of missing or unsupported providers. The original `windows.jsonl` fixture is retained byte-for-byte and now yields 21 unclassified events, zero findings and zero session starts. A separate provider-labelled synthetic fixture retains the positive four-finding/one-session regression checks. These are offline checks; the native execution records below describe earlier revisions and do not establish acceptance of this candidate. No native selection or collection capability was added.
+
 CrumbTrail 0.3.0 has a standalone test suite, source-ID-backed logon-session views, and exact EVTX SystemTime recovery independently compared with the native Windows reader. All eight previous Security timestamp failures are closed: System and all 181 selected Security events now agree with **0 ns difference**, keeping the 1,000 ns gate unchanged. W2 remains partial because the broader channel/OS/responder matrix is open. No ransomware, current-host log collection, server deployment, kernel driver, RAM acquisition or physical-disk imaging is part of this acceptance procedure.
 
 ## Automated and inert checks
@@ -17,9 +19,9 @@ python -m crumbtrail lab --root C:\IRLab\crumbtrail-native `
 python -m crumbtrail verify --root C:\IRLab\crumbtrail-native
 ```
 
-Expected demo and native-fixture results: 21 events, four findings from three rule types, one deduplicated row, one raw artifact, and zero gaps. Open each `report.html`; confirm synthetic labels, 22 original event references across 21 events, all four finding links, escaped text, and raw SHA-256 links. `timeline.json`, `timeline.csv`, `manifest.json`, and the original raw result file must exist. Native execution additionally retains its stdout/stderr/request/result under `collection/run-*/` and records the supplied executable's hash.
+Expected legacy demo interpretation: 21 retained events, 21 unclassified events, zero findings, one deduplicated row, one raw artifact and zero collection-coverage gaps. Open `report.html`; confirm unclassified reasons, synthetic labels, 22 original event references across 21 events, escaped text and raw SHA-256 links. `timeline.json`, `timeline.csv`, `manifest.json` and the original raw result file must exist. The unchanged native fixture would use the same interpretation policy, but it has not been executed for this candidate. Native execution, when separately authorized, additionally retains stdout/stderr/request/result under `collection/run-*/` and records the supplied executable's hash.
 
-Version 0.2 also writes `sessions.json`: one observed start, three ID-linked events, 18 unlinked events, no ambiguous events, no explicit logoff/startup boundaries, and unknown end time. Check that all 21 session-view event entries retain raw references, including both references on the duplicated event. The unlinked fixture file events must not acquire session membership from their process GUID. The existing timeline/event/finding counts remain unchanged.
+For the legacy providerless demo, `sessions.json` now contains zero starts and 21 unlinked events. All entries retain raw references, including both references on the duplicated event. Separately import `windows-providers.jsonl` as synthetic data to check the positive case: one observed start, three ID-linked events, 18 unlinked events, four findings, no ambiguous events and an unknown end time. File events must not acquire membership from a process GUID. The two fixtures are distinct evidence inputs and must remain separately labelled.
 
 ## Session-view acceptance
 

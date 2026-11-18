@@ -17,10 +17,17 @@ def data_path(name):
 
 
 def run_local(case, client_id, executable, *, fixture=False, log_directory=None):
+    """Parse an explicit export directory, or the bundled inert fixture.
+
+    Raw blank directory text is rejected before Path can normalize it to ".".
+    An already constructed Path("") is indistinguishable from explicit Path(".").
+    """
+    if not fixture and (log_directory is None or not os.fspath(log_directory).strip()):
+        raise CaseError("Supply an existing exported EVTX log directory explicitly.")
     executable = Path(executable).resolve()
     if not executable.is_file():
         raise CaseError("Velociraptor executable is missing.")
-    if not fixture and (log_directory is None or not Path(log_directory).is_dir()):
+    if not fixture and not Path(log_directory).is_dir():
         raise CaseError("Supply an existing exported EVTX log directory explicitly.")
     case.binding(client_id)
     sources = []

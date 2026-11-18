@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import PureWindowsPath
 
 from .storage import CaseError, LOGS, digest, encode, iso, records, row_type, timestamp, ticks, iso_ticks, TICKS_PER_SECOND
+from .providers import classify, supported_kind, unclassified_label
 
 
 def guid(value):
@@ -18,6 +19,12 @@ def logon_id(value):
         return str(number) if number > 0 else ""
     except ValueError:
         return ""
+
+
+def process_kind(image, command):
+    if PureWindowsPath(image).name.casefold() in ("vssadmin.exe", "wmic.exe", "wbadmin.exe", "bcdedit.exe") and re.search(r"delete\s+(shadows|shadowstorage|catalog)|shadowcopy.*delete|recoveryenabled\s+no", command, re.I):
+        return "recovery"
+    return "process"
 
 
 def event_time(row, system):
@@ -70,8 +77,12 @@ def normalize(case, row, bound, simulation, exact=None):
     domain = data.get("TargetDomainName") or data.get("SubjectDomainName")
     if domain and account and "\\" not in account and "@" not in account:
         account = str(domain) + "\\" + account
+    classification = classify(channel, provider, code)
+    supported = classification["status"] == "supported"
     kind, label = "event", f"{channel} event {code}"
-    if channel == "Security" and code in (4624, 4625):
+    if not supported:
+        label = unclassified_label(channel, code, classification)
+    elif channel == "Security" and code in (4624, 4625):
         kind = "logon.success" if code == 4624 else "logon.failure"
         label = "Windows logon " + ("succeeded" if code == 4624 else "failed")
     elif (channel == LOGS[2] and code == 1) or (channel == "Security" and code == 4688):
@@ -90,7 +101,7 @@ def normalize(case, row, bound, simulation, exact=None):
         kind, label = "script", "PowerShell script block recorded"
     elif channel == LOGS[4] and code in (1116, 1117):
         kind, label = "detection", "Defender " + ("threat detection" if code == 1116 else "action recorded")
-    if kind == "process" and PureWindowsPath(image).name.casefold() in ("vssadmin.exe", "wmic.exe", "wbadmin.exe", "bcdedit.exe") and re.search(r"delete\s+(shadows|shadowstorage|catalog)|shadowcopy.*delete|recoveryenabled\s+no", command, re.I):
+    if kind == "process" and process_kind(image, command) == "recovery":
         kind, label = "recovery", "Recovery suppression command observed"
     hashes = str(data.get("Hashes") or data.get("Hash") or "")
     match = re.search(r"(?:^|[,;\s])SHA256=([a-f0-9]{64})(?:$|[,;\s])", hashes, re.I)
@@ -101,30 +112,39 @@ def normalize(case, row, bound, simulation, exact=None):
         identity.append({"provider": provider})
     source_logon_ids = [dict(field=field, raw=str(data[field]), value=logon_id(data[field]))
                         for field in ("LogonId", "TargetLogonId", "SubjectLogonId") if field in data]
+    if not supported:
+        account = image = command = target = ""
+        sha = None
     return dict(event_id="EVT-" + digest(encode(identity))[:24], timestamp_utc=utc,
                 timestamp_original=at, client_id=bound["client_id"], org_id=bound["org_id"],
                 timestamp_source=time_source,
                 timestamp_precision="evtx-systemtime-100ns" if exact is not None else "native-float-microsecond" if type(at) in (int, float) else "iso-supplied",
                 hostname=host, channel=channel, event_code=code, record_id=record_id,
-                provider=provider,
+                provider=provider, classification=classification,
                 kind=kind, label=label, account=account.casefold(), image=image, command_line=command,
-                target=target, process_guid=guid(data.get("ProcessGuid")),
-                parent_process_guid=guid(data.get("ParentProcessGuid")),
-                logon_id=logon_id(data.get("LogonId") or data.get("TargetLogonId") or data.get("SubjectLogonId")),
+                target=target, process_guid=guid(data.get("ProcessGuid")) if supported else "",
+                parent_process_guid=guid(data.get("ParentProcessGuid")) if supported else "",
+                logon_id=logon_id(data.get("LogonId") or data.get("TargetLogonId") or data.get("SubjectLogonId")) if supported else "",
                 source_logon_ids=source_logon_ids,
                 sha256=sha, simulation=simulation, references=[], finding_ids=[])
 
 
 def correlate(events, session_view=None):
-    # Use the same full-scope boundary/ambiguity policy as the report. Never
-    # choose a nearest start independently of the source-ID session view.
+    # Retain the optional argument for API compatibility, but rebuild context:
+    # a cached view may predate provider validation or omit a current boundary.
     from .sessions import build_session_view
-    session_view = build_session_view(events) if session_view is None else session_view
+    return _correlate(events, build_session_view(events))
+
+
+def _correlate(events, session_view):
+    """Correlate against a session view freshly built from these complete events."""
     by_id = {event["event_id"]: event for event in events}
     starts = {session["session_id"]: by_id[session["start_event_id"]]
-              for session in session_view["sessions"]}
+              for session in session_view["sessions"]
+              if supported_kind(by_id[session["start_event_id"]]) == "logon.success"}
     linked_starts = {member["event_id"]: starts[member["session_id"]]
-                     for member in session_view["events"] if member["status"] == "linked"}
+                     for member in session_view["events"]
+                     if member["status"] == "linked" and member["session_id"] in starts}
     findings, processes, files, bursts = [], {}, {}, set()
 
     def emit(rule, title, chain, interpretation, suspicious=False):
@@ -137,21 +157,26 @@ def correlate(events, session_view=None):
             event["finding_ids"].append(finding_id)
 
     for event in sorted(events, key=lambda item: (ticks(item["timestamp_utc"]), item["event_id"])):
+        kind = supported_kind(event)
+        if kind is None:
+            continue
+        if kind == "process":
+            kind = process_kind(event["image"], event["command_line"])
         at = ticks(event["timestamp_utc"])
         host = (event["org_id"], event["client_id"], event["simulation"])
         key = (*host, event["process_guid"])
-        if event["kind"] in ("process", "recovery") and event["process_guid"]:
+        if kind in ("process", "recovery") and event["process_guid"]:
             processes[key] = event
             login = linked_starts.get(event["event_id"])
             if login and 0 < at - ticks(login["timestamp_utc"]) <= 1800 * TICKS_PER_SECOND:
                 emit("logon-process", "Logon followed by process execution", [login, event],
                      "The same endpoint and logon ID occur within 30 minutes; this is contextual association.")
-        if event["kind"] == "recovery":
+        if kind == "recovery":
             parent = processes.get((*host, event["parent_process_guid"]))
             chain = [parent, event] if parent and 0 < at - ticks(parent["timestamp_utc"]) <= 1800 * TICKS_PER_SECOND else [event]
             emit("recovery-suppression", "Recovery suppression command observed", chain,
                  "Command-line telemetry records an attempt. Verify its effect; this does not prove recovery data was changed.", True)
-        if event["kind"] == "file" and event["process_guid"]:
+        if kind == "file" and event["process_guid"]:
             recent = files.setdefault(key, [])
             recent[:] = [item for item in recent if at - ticks(item["timestamp_utc"]) <= 120 * TICKS_PER_SECOND]
             recent.append(event)
@@ -216,9 +241,10 @@ def analyze(case):
     # ISO strings can have differing fractional precision; use actual UTC time.
     events = sorted(unique.values(), key=lambda e: (ticks(e["timestamp_utc"]), e["event_id"]))
     session_view = build_session_view(events)
-    findings = correlate(events, session_view)
+    findings = _correlate(events, session_view)
     return dict(schema=1, tool="CrumbTrail", case=case.meta, events=events, findings=findings, gaps=gaps,
                 session_view=session_view,
                 summary=dict(events=len(events), findings=len(findings), gaps=len(gaps), artifacts=len(manifest["artifacts"]),
                              raw_event_rows=raw_events, excluded_outside_window=excluded,
-                             duplicate_rows=raw_events - excluded - len(events)))
+                             duplicate_rows=raw_events - excluded - len(events),
+                             unclassified_events=sum(event["classification"]["status"] != "supported" for event in events)))

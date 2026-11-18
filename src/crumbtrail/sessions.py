@@ -2,16 +2,19 @@
 from bisect import bisect_left, bisect_right
 
 from .storage import digest, encode, ticks as timestamp
+from .providers import event_classification, supported_kind, unclassified_label
 
 
 LIMITATIONS = [
     "Membership is an explicit logon-ID association, not proof of an actor or causality.",
+    "Only supported provider, channel and event ID combinations participate; unclassified events remain unlinked.",
     "Only supplied Security 4634 logoff and 4608 startup records with the Microsoft-Windows-Security-Auditing provider establish boundaries. Other or missing boundaries remain unknown.",
     "A startup marker stops earlier ID associations; it does not supply an exact prior-session logoff time.",
     "A logon ID may be reused outside the collected window. Host identity does not establish a boot identity.",
     "Events without a usable source logon ID are not linked through time, account names, process IDs, or process GUIDs.",
 ]
 REASONS = {
+    "unclassified_event": "This event has no supported provider/channel/event interpretation and does not establish session associations.",
     "missing_source_id": "No usable explicit source logon ID is present.",
     "missing_target_id": "The successful-logon event has no usable TargetLogonId; its subject ID is not a new-session boundary.",
     "conflicting_source_ids": "Distinct subject/target/logon IDs are present; no single session is selected.",
@@ -39,7 +42,10 @@ def event_key(event):
 def source_selection(event):
     """Keep source roles visible; 4624 target identifies the newly observed logon."""
     sources = event.get("source_logon_ids", [])
-    is_start = event["channel"] == "Security" and event["event_code"] == 4624 and event.get("provider", "").casefold() in ("", "microsoft-windows-security-auditing")
+    kind = supported_kind(event)
+    if kind is None:
+        return sources, [], False
+    is_start = kind == "logon.success"
     target_only = event["channel"] == "Security" and event["event_code"] in (4624, 4634)
     eligible = [source for source in sources if source.get("value") and
                 (not target_only or source["field"] == "TargetLogonId")]
@@ -53,7 +59,7 @@ class BoundaryIndex:
         self.startups, self.logoffs, self.by_event = {}, {}, {}
         for event in events:
             _, values, _ = source_selection(event)
-            if event["channel"] != "Security" or event.get("provider", "").casefold() != "microsoft-windows-security-auditing":
+            if event["channel"] != "Security" or supported_kind(event) is None:
                 continue
             code = event["event_code"]
             if code != 4608 and not (code == 4634 and len(values) == 1):
@@ -141,8 +147,11 @@ def build_session_view(events):
     memberships, unbounded = [], {}
     for event in ordered:
         sources, values, is_start, scope = selections[event["event_id"]]
+        classification = event_classification(event)
+        supported = classification["status"] == "supported"
         member = dict(event_id=event["event_id"], timestamp_utc=event["timestamp_utc"],
-                      label=event["label"], kind=event["kind"], scope=scope,
+                      label=event["label"] if supported else unclassified_label(event["channel"], event["event_code"], classification),
+                      kind=event["kind"] if supported else "event", classification=classification, scope=scope,
                       source_logon_ids=sources, logon_ids=values, status="unlinked",
                       session_id=None, candidate_session_ids=[], reason_codes=[],
                       references=sorted(event["references"], key=lambda ref: encode(ref)))
@@ -150,7 +159,9 @@ def build_session_view(events):
         member["boundary_kind"] = marker["kind"] if marker else None
         possible_boundary = event["channel"] == "Security" and (event["event_code"] in (4608, 4634) or
             (event["event_code"] == 4624 and not is_start))
-        if marker and marker["kind"] == "startup":
+        if not supported:
+            member["reason_codes"] = ["unclassified_event"]
+        elif marker and marker["kind"] == "startup":
             member["reason_codes"] = ["startup_boundary"]
         elif possible_boundary and not marker:
             member["reason_codes"] = ["unvalidated_boundary"]

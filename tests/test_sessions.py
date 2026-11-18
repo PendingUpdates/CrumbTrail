@@ -16,6 +16,7 @@ from crumbtrail.storage import Case, case_lock, encode
 
 HOST_A = "C.1111111111111111"
 HOST_B = "C.2222222222222222"
+AUTHORED_PROVIDER = object()
 
 
 class SessionViewTests(unittest.TestCase):
@@ -27,34 +28,39 @@ class SessionViewTests(unittest.TestCase):
         self.case.bind(HOST_A, "host-a")
         self.case.bind(HOST_B, "host-b")
 
-    def row(self, record, minute, fields, code=1, host=HOST_A):
+    def row(self, record, minute, fields, code=1, host=HOST_A, provider=AUTHORED_PROVIDER):
         channel = "Microsoft-Windows-Sysmon/Operational" if code == 1 else "Security"
+        # These are authored mock events, not inferred providers for imports.
+        if provider is AUTHORED_PROVIDER:
+            provider = "Microsoft-Windows-Sysmon" if code == 1 else "Microsoft-Windows-Security-Auditing"
+        system = {"Computer": self.case.binding(host)["hostname"]}
+        if provider is not None:
+            system["Provider"] = {"Name": provider}
         return {"TimeCreated": f"2026-10-30T20:{minute:02}:00Z", "Channel": channel,
                 "EventID": code, "EventRecordID": record,
-                "System": {"Computer": self.case.binding(host)["hostname"]},
+                "System": system,
                 "EventData": fields}
 
-    def event(self, record, minute, fields, code=1, host=HOST_A, simulation=False):
-        event = normalize(self.case, self.row(record, minute, fields, code, host), self.case.binding(host), simulation)
+    def event(self, record, minute, fields, code=1, host=HOST_A, simulation=False, provider=AUTHORED_PROVIDER):
+        event = normalize(self.case, self.row(record, minute, fields, code, host, provider), self.case.binding(host), simulation)
         event["references"] = [{"artifact": "raw/" + str(record) + ".json", "sha256": str(record),
                                 "row": 1, "provenance": {"client_id": host, "simulation": simulation}}]
         return event
 
-    def start(self, record, minute, logon, host=HOST_A, simulation=False, **fields):
+    def start(self, record, minute, logon, host=HOST_A, simulation=False, provider=AUTHORED_PROVIDER, **fields):
         return self.event(record, minute, {"TargetLogonId": logon, "TargetUserName": "analyst", **fields},
-                          4624, host, simulation)
+                          4624, host, simulation, provider)
 
-    def boundary(self, record, minute, code, host=HOST_A, logon="0x42"):
-        row = self.row(record, minute, {"TargetLogonId": logon} if code == 4634 else {}, code, host)
-        row["System"]["Provider"] = {"Name": "Microsoft-Windows-Security-Auditing"}
+    def boundary(self, record, minute, code, host=HOST_A, logon="0x42", provider=AUTHORED_PROVIDER):
+        row = self.row(record, minute, {"TargetLogonId": logon} if code == 4634 else {}, code, host, provider)
         event = normalize(self.case, row, self.case.binding(host), False)
         event["references"] = [{"artifact": "raw/boundary.json", "sha256": "boundary", "row": record}]
         return event
 
-    def process(self, record, minute, **fields):
+    def process(self, record, minute, provider=AUTHORED_PROVIDER, **fields):
         return self.event(record, minute, {
             "Image": r"C:\Windows\example.exe",
-            "ProcessGuid": "11111111-1111-1111-1111-111111111111", **fields})
+            "ProcessGuid": "11111111-1111-1111-1111-111111111111", **fields}, provider=provider)
 
     def logon_findings(self, events):
         return [finding for finding in correlate(events) if finding["rule"] == "logon-process"]
@@ -89,9 +95,12 @@ class SessionViewTests(unittest.TestCase):
                          [[start["event_id"], correct["event_id"]]])
 
     def test_correlation_rejects_untrusted_start_provider(self):
-        start = self.start(1, 1, "0x42")
-        start["provider"] = "Untrusted-Provider"
-        self.assertEqual(self.logon_findings([start, self.process(2, 2, LogonId="0x42")]), [])
+        self.assertEqual(len(self.logon_findings([
+            self.start(1, 1, "0x42"), self.process(2, 2, LogonId="0x42")])), 1)
+        for provider in (None, "Untrusted-Provider"):
+            with self.subTest(provider=provider):
+                start = self.start(1, 1, "0x42", provider=provider)
+                self.assertEqual(self.logon_findings([start, self.process(2, 2, LogonId="0x42")]), [])
 
     def test_correlation_keeps_30_minute_window_and_boundary_ties(self):
         start = self.start(1, 1, "0x42")
@@ -210,19 +219,21 @@ class SessionViewTests(unittest.TestCase):
         self.assertNotEqual(view["sessions"][0]["session_id"], view["sessions"][1]["session_id"])
 
     def test_unrecognized_provider_does_not_establish_boundary(self):
-        marker = self.boundary(2, 2, 4634)
-        marker["provider"] = "Unrelated-Provider"
-        view = build_session_view([self.start(1, 1, "0x42"), marker])
-        self.assertEqual(view["boundaries"], [])
-        self.assertIsNone(view["sessions"][0]["end_utc"])
-        self.assertEqual(view["events"][-1]["reason_codes"], ["unvalidated_boundary"])
+        for provider in (None, "Unrelated-Provider"):
+            with self.subTest(provider=provider):
+                marker = self.boundary(2, 2, 4634, provider=provider)
+                view = build_session_view([self.start(1, 1, "0x42"), marker])
+                self.assertEqual(view["boundaries"], [])
+                self.assertIsNone(view["sessions"][0]["end_utc"])
+                self.assertEqual(view["events"][-1]["reason_codes"], ["unclassified_event"])
 
     def test_wrong_provider_success_record_does_not_establish_start(self):
-        event = self.start(1, 1, "0x42")
-        event["provider"] = "Unrelated-Provider"
-        view = build_session_view([event])
-        self.assertEqual(view["sessions"], [])
-        self.assertEqual(view["events"][0]["reason_codes"], ["unvalidated_boundary"])
+        for provider in (None, "Unrelated-Provider"):
+            with self.subTest(provider=provider):
+                event = self.start(1, 1, "0x42", provider=provider)
+                view = build_session_view([event])
+                self.assertEqual(view["sessions"], [])
+                self.assertEqual(view["events"][0]["reason_codes"], ["unclassified_event"])
 
     def test_provider_difference_is_not_deduplicated_away(self):
         row = self.row(1, 1, {"TargetLogonId": "0x42"}, code=4634)

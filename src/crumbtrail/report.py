@@ -1,8 +1,23 @@
 """Portable, escaped offline HTML plus JSON and spreadsheet-safe CSV."""
 import csv
+import stat
 from html import escape
 
-from .storage import save
+from .storage import CaseError, atomic_writer, save
+
+REPORT_FILENAMES = ("timeline.json", "sessions.json", "timeline.csv", "report.html")
+
+
+def validate_report_destinations(root):
+    """Reject unexpected existing entries before replacing any report outputs."""
+    for name in REPORT_FILENAMES:
+        try:
+            status = (root / name).lstat()
+        except FileNotFoundError:
+            continue
+        if (not stat.S_ISREG(status.st_mode) or status.st_nlink > 1
+                or getattr(status, "st_file_attributes", 0) & 0x400):
+            raise CaseError("Report destination must be a regular file without aliases: " + name)
 
 
 def csv_cell(value):
@@ -47,10 +62,11 @@ def session_section(view):
 
 
 def write_report(case, result):
+    validate_report_destinations(case.root)
     save(case.root / "timeline.json", result)
     save(case.root / "sessions.json", result["session_view"])
     fields = ["event_id", "timestamp_utc", "hostname", "channel", "event_code", "kind", "label", "account", "image", "command_line", "target", "simulation"]
-    with (case.root / "timeline.csv").open("w", encoding="utf-8-sig", newline="") as stream:
+    with atomic_writer(case.root / "timeline.csv", encoding="utf-8-sig", newline="") as stream:
         writer = csv.writer(stream)
         writer.writerow(fields)
         writer.writerows([csv_cell(event.get(field)) for field in fields] for event in result["events"])
@@ -75,6 +91,7 @@ h1,h2{color:#163a54}a{color:#075985}table{width:100%;border-collapse:collapse;ba
 </style></head><body><h1>CrumbTrail</h1>'''
     page += "<p>Case <strong>" + esc(case.meta["case_id"]) + "</strong> · " + esc(case.meta["start"]) + " to " + esc(case.meta["end"]) + "</p>"
     page += "<p>" + esc(summary["events"]) + " events · " + esc(summary["findings"]) + " findings · " + esc(summary["gaps"]) + " coverage gaps</p>"
+    page += "<p>" + esc(summary["unclassified_events"]) + " unclassified events. These retained events have no supported provider/channel/event interpretation; this count is separate from collection coverage gaps.</p>"
     page += "<p>Findings describe telemetry associations, not proof of encryption or compromise. Original raw bytes remain linked below. The local manifest is unsigned.</p>"
     page += '<p><a href="timeline.json">JSON evidence timeline</a> · <a href="timeline.csv">CSV timeline</a> · <a href="manifest.json">SHA-256 manifest</a></p>'
     page += "<h2>Coverage</h2><ul>" + (gaps or "<li>No reported gaps in the supplied selected-channel coverage.</li>") + "</ul>"
@@ -82,4 +99,5 @@ h1,h2{color:#163a54}a{color:#075985}table{width:100%;border-collapse:collapse;ba
     page += "<h2>Findings</h2><ul>" + (findings or "<li>No configured rule matched; this is not a clean-host verdict.</li>") + "</ul>"
     page += session_section(result["session_view"])
     page += '<h2>Timeline (UTC)</h2><div class="table"><table><thead><tr><th>UTC</th><th>Endpoint</th><th>Observation</th></tr></thead><tbody>' + "".join(rows) + "</tbody></table></div></body></html>"
-    (case.root / "report.html").write_text(page, encoding="utf-8")
+    with atomic_writer(case.root / "report.html", encoding="utf-8") as stream:
+        stream.write(page)
